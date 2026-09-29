@@ -254,31 +254,108 @@ namespace Crystal.FFXILobbyServer
             return characters;
         }
 
-        public static uint CreateCharacter(WorldContainer world, CharaInfo charaInfo, string name, uint startZone)
+        // ---- LandSandBoat accounts ----------------------------------------------------------------------
+        // The world database is LandSandBoat's, which ties every character and session to a row of its
+        // `accounts` table (chars.accid, accounts_sessions.accid with a UNIQUE key, account-wide state on
+        // the map server). PlayOnline members have no such row, so each PlayOnline ID gets a shadow
+        // account: login "pol:<id>", and a password no input can match (LSB checks non-bcrypt passwords
+        // with PASSWORD(), whose output always starts with '*'), so it cannot be used through xiloader.
+        // xi_connect keeps serving its own accounts next to this.
+
+        private const string LSB_POL_LOGIN_PREFIX = "pol:";
+        private const string LSB_UNUSABLE_PASSWORD = "!pol";
+        private const uint LSB_FIRST_ACCOUNT_ID = 1000;
+        private const uint MAX_CHARID = 0xFFFF; // the charid is the low 16 bits of the PlayOnline sub id
+
+        private static uint GetOrCreateLsbAccount(MySqlConnection conn, string polId)
+        {
+            string login = (LSB_POL_LOGIN_PREFIX + polId);
+            if (login.Length > 16)
+                login = login[..16];
+
+            MySqlCommand find = new("SELECT id FROM accounts WHERE login = @login LIMIT 1", conn);
+            find.Parameters.AddWithValue("@login", login);
+            object found = find.ExecuteScalar();
+            if (found != null && found != DBNull.Value)
+                return Convert.ToUInt32(found);
+
+            MySqlCommand create = new(@"
+                INSERT INTO accounts(id, login, password, timecreate, timelastmodify, status, priv)
+                SELECT GREATEST(COALESCE(MAX(id), 0) + 1, @firstId), @login, @password, NOW(), NOW(), 1, 1 FROM accounts;
+                SELECT id FROM accounts WHERE login = @login LIMIT 1;
+            ", conn);
+            create.Parameters.AddWithValue("@firstId", LSB_FIRST_ACCOUNT_ID);
+            create.Parameters.AddWithValue("@login", login);
+            create.Parameters.AddWithValue("@password", LSB_UNUSABLE_PASSWORD);
+            uint accid = Convert.ToUInt32(create.ExecuteScalar());
+            Program.Log.Info($"{polId} - Created LandSandBoat account {accid} ({login})");
+            return accid;
+        }
+
+        // Characters made before this code have accid 0; give them to the member's shadow account.
+        private static uint GetCharacterAccount(MySqlConnection conn, uint charId, string polId)
+        {
+            MySqlCommand get = new("SELECT accid, original_accid FROM chars WHERE charid = @charId", conn);
+            get.Parameters.AddWithValue("@charId", charId);
+            uint accid = 0, originalAccid = 0;
+            using (MySqlDataReader reader = get.ExecuteReader())
+            {
+                if (!reader.Read())
+                    return 0;
+                accid = reader.GetUInt32("accid");
+                originalAccid = reader.GetUInt32("original_accid");
+            }
+
+            if (accid != 0)
+                return accid;
+            if (originalAccid != 0)
+                return 0; // deleted (LandSandBoat keeps the row with accid 0)
+
+            accid = GetOrCreateLsbAccount(conn, polId);
+            MySqlCommand adopt = new("UPDATE chars SET accid = @accid WHERE charid = @charId AND accid = 0", conn);
+            adopt.Parameters.AddWithValue("@accid", accid);
+            adopt.Parameters.AddWithValue("@charId", charId);
+            adopt.ExecuteNonQuery();
+            return accid;
+        }
+
+        public static uint CreateCharacter(WorldContainer world, CharaInfo charaInfo, string name, uint startZone, string polId)
         {
             using MySqlConnection conn = new($"Server={world.DbHost}; Port={world.DbPort}; Database={world.DbName}; UID={world.DbUser}; Password={world.DbPass}");
             try
             {
                 conn.Open();
 
-                // Get the next open charid on this server
+                uint accid = GetOrCreateLsbAccount(conn, polId);
+
+                // The next free charid that fits the 16 bits of the sub id. xi_connect allocates from the
+                // same table (MAX + 1), so the two only differ once ids pass 0xFFFF: then find a gap.
                 uint charId = 0;
-                MySqlCommand getCharIdCmd = new("SELECT max(charid) FROM chars", conn);
-                object result = getCharIdCmd.ExecuteScalar();
-                if (result != null && result != DBNull.Value)
+                MySqlCommand getCharIdCmd = new("SELECT COALESCE(MAX(charid), 0) + 1 FROM chars WHERE charid <= @max", conn);
+                getCharIdCmd.Parameters.AddWithValue("@max", MAX_CHARID);
+                charId = Convert.ToUInt32(getCharIdCmd.ExecuteScalar());
+                if (charId > MAX_CHARID)
                 {
-                    charId = Convert.ToUInt32(result);
-                    charId = (charId + 1) & 0xFFFF;
+                    MySqlCommand gapCmd = new(@"
+                        SELECT MIN(c.charid) + 1 FROM chars c
+                        WHERE c.charid < @max AND NOT EXISTS (SELECT 1 FROM chars n WHERE n.charid = c.charid + 1)
+                    ", conn);
+                    gapCmd.Parameters.AddWithValue("@max", MAX_CHARID);
+                    object gap = gapCmd.ExecuteScalar();
+                    if (gap == null || gap == DBNull.Value)
+                    {
+                        Program.Log.Error($"{polId} - No free character id below 0x10000");
+                        return 0;
+                    }
+                    charId = Convert.ToUInt32(gap);
                 }
-                else
-                    charId = 1;
 
                 // We have a new subid!
                 uint newSubId = (world.World.Num << 16) | charId;
 
                 // Create character
                 MySqlCommand cmd = new(@"
-                    INSERT INTO chars(charid,charname,pos_zone,nation) VALUES(@charId, @charName, @startZone, @nation);
+                    INSERT INTO chars(charid,accid,charname,pos_zone,nation) VALUES(@charId, @accid, @charName, @startZone, @nation);
                     INSERT INTO char_look(charid,face,race,size) VALUES(@charId, @face, @race, @size);
                     INSERT INTO char_stats(charid,mjob) VALUES(@charId, @job);
                     INSERT INTO char_exp(charid) VALUES(@charId) ON DUPLICATE KEY UPDATE charid = charid;
@@ -294,6 +371,7 @@ namespace Crystal.FFXILobbyServer
                 ", conn);
 
                 cmd.Parameters.AddWithValue("@charId", charId);
+                cmd.Parameters.AddWithValue("@accid", accid);
                 cmd.Parameters.AddWithValue("@charName", name);
                 cmd.Parameters.AddWithValue("@startZone", startZone);
                 cmd.Parameters.AddWithValue("@nation", charaInfo.TownNum);
@@ -324,8 +402,10 @@ namespace Crystal.FFXILobbyServer
             try
             {
                 conn.Open();
+                // As xi_connect does: keep the row (and every char_* row) and detach it from the account.
                 MySqlCommand cmd = new(@"
-                    DELETE FROM chars WHERE charid = @ffxiWorldId
+                    UPDATE chars SET original_accid = accid, accid = 0 WHERE charid = @ffxiWorldId AND accid <> 0;
+                    DELETE FROM accounts_sessions WHERE charid = @ffxiWorldId;
                 ", conn);
                 cmd.Parameters.AddWithValue("@ffxiWorldId", ffxiWorldId);
 
@@ -372,16 +452,43 @@ namespace Crystal.FFXILobbyServer
             return false;
         }
 
-        public static bool AddSession(WorldContainer world, uint ffxiWorldId, byte[] key, uint serverAddress, uint serverPort, uint clientAddress)
+        public static bool AddSession(WorldContainer world, uint ffxiWorldId, string polId, byte[] key, uint serverAddress, uint serverPort, uint clientAddress)
         {
             using MySqlConnection conn = new($"Server={world.DbHost}; Port={world.DbPort}; Database={world.DbName}; UID={world.DbUser}; Password={world.DbPass}");
             try
             {
                 conn.Open();
-                MySqlCommand cmd = new(@"
-                    INSERT INTO accounts_sessions(charid, session_key, server_addr, server_port, client_addr, version_mismatch)
-                    VALUES(@charid, @session_key, @server_addr, @server_port, @client_addr, @version_mismatch)
+
+                uint accid = GetCharacterAccount(conn, ffxiWorldId, polId);
+                if (accid == 0)
+                {
+                    Program.Log.Error($"{polId} - Character {ffxiWorldId} has no account (deleted?)");
+                    return false;
+                }
+
+                // Mirror xi_connect (data_session.cpp): a session left behind by a zone-out the other map
+                // server never saw goes after 2 minutes; a character still logged in is refused.
+                MySqlCommand stale = new(@"
+                    DELETE FROM accounts_sessions
+                    WHERE accid = @accid AND client_port = 0 AND last_zoneout_time <= SUBTIME(NOW(), '00:02:00')
                 ", conn);
+                stale.Parameters.AddWithValue("@accid", accid);
+                stale.ExecuteNonQuery();
+
+                MySqlCommand active = new("SELECT charid FROM accounts_sessions WHERE accid = @accid LIMIT 1", conn);
+                active.Parameters.AddWithValue("@accid", accid);
+                object activeChar = active.ExecuteScalar();
+                if (activeChar != null && activeChar != DBNull.Value)
+                {
+                    Program.Log.Warn($"{polId} - Account {accid} already has character {activeChar} logged in");
+                    return false;
+                }
+
+                MySqlCommand cmd = new(@"
+                    INSERT INTO accounts_sessions(accid, charid, session_key, server_addr, server_port, client_addr, version_mismatch)
+                    VALUES(@accid, @charid, @session_key, @server_addr, @server_port, @client_addr, @version_mismatch)
+                ", conn);
+                cmd.Parameters.AddWithValue("@accid", accid);
                 cmd.Parameters.AddWithValue("@session_key", key);
                 cmd.Parameters.AddWithValue("@charid", ffxiWorldId);
                 cmd.Parameters.AddWithValue("@server_addr", serverAddress);

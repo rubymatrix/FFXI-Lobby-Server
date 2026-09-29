@@ -205,7 +205,7 @@ namespace Crystal.FFXILobbyServer
 
             // Create a new character and update the content id
             WorldContainer world = Server.WorldList[charaInfo.WorldNum];
-            uint newSubId = Database.CreateCharacter(world, charaInfo, RequestedNewCharName, startZone);
+            uint newSubId = Database.CreateCharacter(world, charaInfo, RequestedNewCharName, startZone, PolProData);
             if (newSubId != 0)
                 return Database.UpdateFFXISubContentId(contentId, newSubId, RequestedNewCharName);
             return false;
@@ -225,7 +225,10 @@ namespace Crystal.FFXILobbyServer
                 {
                     WorldContainer world = Server.GetWorldFromSubContentId(chara.ContentsSubUserId);
                     uint myIp = BitConverter.ToUInt32(((IPEndPoint)ClientSocket.RemoteEndPoint).Address.GetAddressBytes());
-                    Database.AddSession(world, ffxiIdWorld, key, serverAddress, port, myIp);
+                    // No session (already logged in, deleted, database error): the map server would refuse
+                    // the character anyway, so fail here and the lobby sends an error instead.
+                    if (!Database.AddSession(world, ffxiIdWorld, PolProData, key, serverAddress, port, myIp))
+                        return null;
                     return new(world.World.Num, world.ServerIp, world.ServerPort, world.CacheIp, world.CachePort);
                 }
             }
