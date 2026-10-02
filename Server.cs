@@ -40,6 +40,10 @@ namespace Crystal.FFXILobbyServer
 
         public readonly List<WorldContainer> WorldList;
 
+        // lobby.cfg login hardening (FFXILobbyConfig)
+        public bool SingleUseContentAuth = true;
+        public bool CheckClientIp = true;
+
         private readonly List<Client> ClientList = [];
 
         public Server(List<WorldContainer> worldList)

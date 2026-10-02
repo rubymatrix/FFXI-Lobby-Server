@@ -116,17 +116,26 @@ namespace Crystal.FFXILobbyServer
                 return false;
             }
 
-            var polData = Database.GetPlayonlineRandomValue(authHash);
-
-            if (polData == null)
+            // The member's PlayOnline session. The login must come from the address that session was opened from
+            // (both servers see the same public address), and its hash opens one lobby login only.
+            var auth = Database.ClaimContentAuth(authHash, Server.SingleUseContentAuth);
+            if (auth == null)
             {
+                Program.Log.Warn($"Lobby login from {ClientIp}: unknown or already used contents-auth hash");
+                key = 0;
+                serverExpCode = 0;
+                return false;
+            }
+            if (Server.CheckClientIp && auth.ClientIp != ClientIp.MapToIPv4().ToString())
+            {
+                Program.Log.Warn($"{auth.PolId} - Lobby login from {ClientIp.MapToIPv4()}, but the PlayOnline session is from {auth.ClientIp}; refused (lobby.cfg checkClientIp)");
                 key = 0;
                 serverExpCode = 0;
                 return false;
             }
 
-            Password = polData.Item1;
-            PolProData = polData.Item2;
+            Password = auth.RandomValue;
+            PolProData = auth.PolId;
 
             if (Password == null)
             {
@@ -144,7 +153,7 @@ namespace Crystal.FFXILobbyServer
             uint? enabled = null;
             foreach (var world in Server.WorldList)
             {
-                uint? w = Utils.ServerExpansions(world.SettingsDir);
+                uint? w = world.IsFederated ? world.Expansions : Utils.ServerExpansions(world.SettingsDir);
                 if (w != null)
                     enabled = (enabled ?? 0) | w.Value;
             }
@@ -180,7 +189,7 @@ namespace Crystal.FFXILobbyServer
             CharacterPrimitive[] contentIds = Database.GetFFXIContentIds(PolProData);
 
             // Grab chara data from each server
-            CachedCharaList = Database.GetCharacters(Server.WorldList, contentIds);
+            CachedCharaList = Database.GetCharacters(Server.WorldList, contentIds, PolProData);
             return CachedCharaList;
         }
 
@@ -221,7 +230,17 @@ namespace Crystal.FFXILobbyServer
 
             // Create a new character and update the content id
             WorldContainer world = Server.WorldList[charaInfo.WorldNum];
-            uint newSubId = Database.CreateCharacter(world, charaInfo, RequestedNewCharName, startZone, PolProData);
+            string name = RequestedNewCharName.TrimEnd('\0');
+            uint newSubId;
+            if (world.IsFederated)
+            {
+                // The world picks the starting zone and enforces its own name and account rules
+                uint charId = Federation.CreateCharacter(world, PolProData, new XiToken.NewCharacter(
+                    name, (byte)charaInfo.RaceNum, (byte)charaInfo.FaceNum, charaInfo.Size, charaInfo.MJobNum, charaInfo.TownNum));
+                newSubId = charId is > 0 and <= 0xFFFF ? (world.World.Num << 16) | charId : 0;
+            }
+            else
+                newSubId = Database.CreateCharacter(world, charaInfo, RequestedNewCharName, startZone, PolProData);
             if (newSubId != 0)
                 return Database.UpdateFFXISubContentId(contentId, newSubId, RequestedNewCharName);
             return false;
@@ -242,12 +261,10 @@ namespace Crystal.FFXILobbyServer
                     WorldContainer world = Server.GetWorldFromSubContentId(chara.ContentsSubUserId);
                     IPAddress clientAddress = ((IPEndPoint)ClientSocket.RemoteEndPoint).Address.MapToIPv4();
 
-                    // A world with a federation gateway writes its own session from a signed world-entry token,
-                    // and names the map server for the character's zone.
-                    if (world.UsesGateway)
+                    // A federated world writes its own session from a signed world-entry token, and names the map
+                    // server for the character's zone.
+                    if (world.IsFederated)
                     {
-                        if (Federation.Issuer == null || Database.PrepareFederatedEntry(world, ffxiIdWorld, PolProData, Federation.Issuer.ServerId) == 0)
-                            return null;
                         string version = ClientVersion.Length > 16 ? ClientVersion[..16] : ClientVersion;
                         var entry = new XiToken.WorldEntry(ffxiIdWorld, null, clientAddress.ToString(), version, ClientExpansions, key);
                         Federation.Admission admission = Federation.Admit(world, PolProData, entry);
@@ -283,8 +300,11 @@ namespace Crystal.FFXILobbyServer
                 if (chara.ContentsId == contentId && (chara.ContentsSubUserId & 0xFFFF) == ffxiIdWorld)
                 {
                     WorldContainer world = Server.GetWorldFromSubContentId(chara.ContentsSubUserId);
-                    Database.DeleteCharacter(world, ffxiIdWorld);
-                    Database.UpdateFFXISubContentId(contentId, 0, "");
+                    bool deleted = world.IsFederated
+                        ? Federation.DeleteCharacter(world, PolProData, ffxiIdWorld)
+                        : Database.DeleteCharacter(world, ffxiIdWorld);
+                    if (deleted)
+                        Database.UpdateFFXISubContentId(contentId, 0, "");
                     return;
                 }
             }
@@ -303,8 +323,11 @@ namespace Crystal.FFXILobbyServer
                 if (chara.ContentsId == contentId && (chara.ContentsSubUserId & 0xFFFF) == ffxiIdWorld)
                 {
                     WorldContainer world = Server.GetWorldFromSubContentId(chara.ContentsSubUserId);
-                    Database.RenameCharacter(world, ffxiIdWorld, newName);
-                    Database.UpdateFFXISubContentId(contentId, chara.ContentsSubUserId, newName);
+                    bool renamed = world.IsFederated
+                        ? Federation.RenameCharacter(world, PolProData, ffxiIdWorld, newName.TrimEnd('\0'))
+                        : Database.RenameCharacter(world, ffxiIdWorld, newName);
+                    if (renamed)
+                        Database.UpdateFFXISubContentId(contentId, chara.ContentsSubUserId, newName);
                     return;
                 }
             }

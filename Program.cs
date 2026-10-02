@@ -24,6 +24,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using NLog;
 using System;
+using System.Linq;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -52,8 +53,11 @@ namespace Crystal.FFXILobbyServer
 
             // Config path arg + load config
             string cfgPath = "./lobby.cfg";
-            if (args.Length >= 2 && args[0].Equals("--cfg"))
-                cfgPath = args[1];
+            int cfgArg = Array.IndexOf(args, "--cfg");
+            if (cfgArg >= 0 && cfgArg + 1 < args.Length)
+                cfgPath = args[cfgArg + 1];
+            // --federate-accounts: map existing members to their world accounts for federated worlds, then exit
+            bool federateAccounts = args.Contains("--federate-accounts");
             FFXILobbyConfig config;
             try
             {
@@ -85,10 +89,19 @@ namespace Crystal.FFXILobbyServer
             Database.POL_DB_USERNAME = config.PolDbUsername;
             Database.POL_DB_PASSWORD = config.PolDbPassword;
 
-            Federation.Configure(config);
+            Federation.Configure(config, cfgPath);
+            if (federateAccounts)
+            {
+                Environment.ExitCode = Federation.MapExistingAccounts(config);
+                return;
+            }
 
             // Setup Server
-            Server server = new Server(config.WorldList);
+            Server server = new Server(config.WorldList)
+            {
+                SingleUseContentAuth = config.SingleUseContentAuth,
+                CheckClientIp = config.CheckClientIp,
+            };
 
             // Setup Service
             var builder = Host.CreateApplicationBuilder(args);

@@ -43,11 +43,20 @@ namespace Crystal.FFXILobbyServer
 
         public readonly List<WorldContainer> WorldList;
 
+        public readonly bool SingleUseContentAuth;
+        public readonly bool CheckClientIp;
+
         // <federation serverId="xi1..." kid="2026-10" signingKey="path to k4.secret file"/>: this lobby's xitoken
         // identity, for worlds that take characters through a federation gateway
         public readonly string FederationServerId;
         public readonly string FederationKeyId;
         public readonly string FederationSigningKey;
+
+        // <registry url="https://... or a file" trust="xi1..." pin="sha256:..."/>: a signed list of federated worlds to
+        // offer besides the ones named under <worlds>
+        public readonly string RegistryUrl;
+        public readonly string RegistryTrust;
+        public readonly string RegistryPin;
 
         public FFXILobbyConfig(string path) 
         {
@@ -60,6 +69,10 @@ namespace Crystal.FFXILobbyServer
             // Load the server configs
             XmlNode cfgNode = doc.DocumentElement.SelectSingleNode("/lobbycfg");
             ServerIp = cfgNode.Attributes["serverIp"]?.InnerText;
+            // Login hardening, both on unless set to "false": a contents-auth hash opens one lobby login, and the
+            // lobby login must come from the address of the member's PlayOnline session.
+            SingleUseContentAuth = !"false".Equals(cfgNode.Attributes["singleUseContentAuth"]?.InnerText, StringComparison.OrdinalIgnoreCase);
+            CheckClientIp = !"false".Equals(cfgNode.Attributes["checkClientIp"]?.InnerText, StringComparison.OrdinalIgnoreCase);
 
             // Go through subsettings
             List<WorldContainer> tempWorldList = [];
@@ -79,41 +92,58 @@ namespace Crystal.FFXILobbyServer
                     FederationKeyId = cfgChildNode.Attributes["kid"]?.InnerText;
                     FederationSigningKey = cfgChildNode.Attributes["signingKey"]?.InnerText;
                 }
+                if (cfgChildNode.Name.Equals("registry"))
+                {
+                    RegistryUrl = cfgChildNode.Attributes["url"]?.InnerText;
+                    RegistryTrust = cfgChildNode.Attributes["trust"]?.InnerText;
+                    RegistryPin = cfgChildNode.Attributes["pin"]?.InnerText;
+                }
                 if (cfgChildNode.Name.Equals("worlds"))
                 {
                     foreach (XmlNode worldNode in cfgChildNode.ChildNodes)
                     {
                         if (worldNode.Name.Equals("world"))
                         {
-                            ushort num = ushort.Parse(worldNode.Attributes["id"]?.InnerText);
-                            string name = worldNode.Attributes["name"]?.InnerText;
-                            string srvDbHost = worldNode.Attributes["dbHost"]?.InnerText;
-                            string srvDbPort = worldNode.Attributes["dbPort"]?.InnerText;
-                            string srvName = worldNode.Attributes["dbName"]?.InnerText;
-                            string srvUser = worldNode.Attributes["dbUser"]?.InnerText;
-                            string srvPass = worldNode.Attributes["dbPass"]?.InnerText;
+                            string Attr(string attr) => worldNode.Attributes[attr]?.InnerText;
+                            uint Ip(string attr) => Attr(attr) is { } ip ? BitConverter.ToUInt32(IPAddress.Parse(ip).GetAddressBytes()) : 0;
+                            uint Port(string attr) => Attr(attr) is { } port ? uint.Parse(port) : 0;
 
-                            uint srvIp = BitConverter.ToUInt32(IPAddress.Parse(worldNode.Attributes["ip"]?.InnerText).GetAddressBytes()); 
-                            uint srvPort = uint.Parse(worldNode.Attributes["port"]?.InnerText);
-                            uint cacheIp = BitConverter.ToUInt32(IPAddress.Parse(worldNode.Attributes["cacheIp"]?.InnerText).GetAddressBytes());
-                            uint cachePort = uint.Parse(worldNode.Attributes["cachePort"]?.InnerText);
+                            ushort num = ushort.Parse(Attr("id"));
+                            string name = Attr("name");
+
+                            // A federated world: trust="<server id>" keyset="<its key set URL>" [pin="sha256:..."]
+                            // [gateway="<URL overriding the key set's>"]; the name comes from the key set unless given.
+                            // dbHost & co. may stay for --federate-accounts.
+                            if (Attr("trust") is { Length: > 0 } trust)
+                            {
+                                WorldContainer federated = new(new World() { Num = num, Name = name ?? trust[4..12] },
+                                    Attr("dbHost"), Attr("dbPort"), Attr("dbName"), Attr("dbUser"), Attr("dbPass"),
+                                    0, 0, Ip("cacheIp"), Port("cachePort"))
+                                {
+                                    Trust = trust,
+                                    KeySetUrl = Attr("keyset") ?? "",
+                                    Pin = Attr("pin"),
+                                    GatewayOverride = Attr("gateway"),
+                                    NameFromKeySet = name == null,
+                                };
+                                tempWorldList.Add(federated);
+                                continue;
+                            }
 
                             tempWorldList.Add(new(
-                                new World() { Num = num, Name = name},
-                                srvDbHost,
-                                srvDbPort, 
-                                srvName, 
-                                srvUser, 
-                                srvPass,
-                                srvIp,
-                                srvPort,
-                                cacheIp,
-                                cachePort
+                                new World() { Num = num, Name = name },
+                                Attr("dbHost"),
+                                Attr("dbPort"),
+                                Attr("dbName"),
+                                Attr("dbUser"),
+                                Attr("dbPass"),
+                                Ip("ip"),
+                                Port("port"),
+                                Ip("cacheIp"),
+                                Port("cachePort")
                             )
                             {
-                                SettingsDir = worldNode.Attributes["settingsDir"]?.InnerText ?? "",
-                                GatewayUrl = worldNode.Attributes["gateway"]?.InnerText ?? "",
-                                FederationWorldId = worldNode.Attributes["worldId"]?.InnerText ?? "",
+                                SettingsDir = Attr("settingsDir") ?? "",
                             });
                         }
                     }

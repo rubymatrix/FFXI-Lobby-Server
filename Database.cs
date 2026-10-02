@@ -37,34 +37,40 @@ namespace Crystal.FFXILobbyServer
         public static string POL_DB_USERNAME = "root";
         public static string POL_DB_PASSWORD = "";
 
-        public static Tuple<byte[], string> GetPlayonlineRandomValue(byte[] authHash)
+        public record ContentAuth(byte[] RandomValue, string PolId, string ClientIp);
+
+        // The PlayOnline session a lobby login's contents-auth hash belongs to (the profile server writes the hash when
+        // the member starts the game). With `consume`, the hash is cleared in the same step, so it opens one lobby
+        // login only: a copied hash is worthless once used.
+        public static ContentAuth ClaimContentAuth(byte[] authHash, bool consume)
         {
             using MySqlConnection conn = new($"Server={POL_DB_HOST}; Port={POL_DB_PORT}; Database={POL_DB_NAME}; UID={POL_DB_USERNAME}; Password={POL_DB_PASSWORD}");
             try
             {
                 conn.Open();
-                MySqlCommand cmd = new("SELECT polRandomValueBinary, polId FROM sessions WHERE polContentAuthHash = @authHash", conn);
+                ContentAuth found = null;
+                MySqlCommand cmd = new("SELECT polRandomValueBinary, polId, clientIp FROM sessions WHERE polContentAuthHash = @authHash", conn);
                 cmd.Parameters.AddWithValue("@authHash", authHash);
-
-                using MySqlDataReader Reader = cmd.ExecuteReader();
-                while (Reader.Read())
+                using (MySqlDataReader reader = cmd.ExecuteReader())
                 {
-                    byte[] randomValue = new byte[0x10];
-                    long bytesRead = Reader.GetBytes("polRandomValueBinary", 0, randomValue, 0, 0x10);
-                    if (bytesRead == 0x10)
+                    while (found == null && reader.Read())
                     {
-                        string polProData = Reader.GetString("polId");
-                        return new(randomValue, polProData);
+                        byte[] randomValue = new byte[0x10];
+                        if (reader.GetBytes("polRandomValueBinary", 0, randomValue, 0, 0x10) == 0x10)
+                            found = new(randomValue, reader.GetString("polId"), reader.GetString("clientIp"));
                     }
                 }
+                if (found == null || !consume)
+                    return found;
+
+                MySqlCommand claim = new("UPDATE sessions SET polContentAuthHash = NULL WHERE polContentAuthHash = @authHash AND polId = @polId", conn);
+                claim.Parameters.AddWithValue("@authHash", authHash);
+                claim.Parameters.AddWithValue("@polId", found.PolId);
+                return claim.ExecuteNonQuery() > 0 ? found : null; // another login claimed it first
             }
             catch (MySqlException e)
             {
                 Program.Log.Error(e.ToString());
-            }
-            finally
-            {
-                conn.Dispose();
             }
             return null;
         }
@@ -152,11 +158,13 @@ namespace Crystal.FFXILobbyServer
             return true;
         }
 
-        public static Character[] GetCharacters(List<WorldContainer> worldList, CharacterPrimitive[] contentIdList)
+        public static Character[] GetCharacters(List<WorldContainer> worldList, CharacterPrimitive[] contentIdList, string polId)
         {
             // Go through each content id. If there is a server id, grab chara data, otherwise set to blank.
             int indx = 0;
             Character[] characters = new Character[contentIdList.Length];
+            // Federated worlds answer for all of a member's characters at once
+            Dictionary<ushort, IReadOnlyList<XiToken.GatewayCharacter>> federatedLists = [];
             foreach (CharacterPrimitive polChar in contentIdList)
             {
                 // This content id does not have a character
@@ -174,6 +182,22 @@ namespace Crystal.FFXILobbyServer
                 // This content id has a character, grab data. World id is high 32bits of subid.
                 ushort worldNum = (ushort)((polChar.ContentsSubUserId >> 16) & 0xFFFF);
                 WorldContainer world = worldList.Where(container => container.World.Num == worldNum).FirstOrDefault();
+                if (world == null)
+                    continue; // a world this lobby no longer offers
+                if (world.IsFederated)
+                {
+                    if (!federatedLists.TryGetValue(worldNum, out var list))
+                    {
+                        list = Federation.ListCharacters(world, polId);
+                        if (list == null)
+                            return null;
+                        federatedLists[worldNum] = list;
+                    }
+                    XiToken.GatewayCharacter found = list.FirstOrDefault(c => c.Id == (polChar.ContentsSubUserId & 0xFFFF));
+                    if (found != null)
+                        characters[indx++] = FromGateway(polChar, world, found);
+                    continue;
+                }
                 using MySqlConnection conn = new($"Server={world.DbHost}; Port={world.DbPort}; Database={world.DbName}; UID={world.DbUser}; Password={world.DbPass}");
                 try
                 {
@@ -252,6 +276,104 @@ namespace Crystal.FFXILobbyServer
             }
 
             return characters;
+        }
+
+        // A federated world's character, as the lobby describes it to the client
+        private static Character FromGateway(CharacterPrimitive polChar, WorldContainer world, XiToken.GatewayCharacter c)
+        {
+            Character character = new()
+            {
+                FFXiId = (uint)(polChar.ContentsId & 0xFFFFFFFFL),
+                FFXiIdWorld = (ushort)(polChar.ContentsSubUserId & 0xFFFF),
+                WorldId = (ushort)((polChar.ContentsSubUserId >> 16) & 0xFFFF),
+                Status = 1,
+                Rename = (ushort)(c.Rename ? 1 : 0),
+                Name = c.Name.PadRight(16, '\0')[..16],
+                WorldName = world.World.Name,
+            };
+            CharaInfo info = new()
+            {
+                RaceNum = c.Race,
+                MJobNum = c.MainJob,
+                MJobLevel = c.MainJobLevel,
+                SJobNum = c.SubJob,
+                FaceNum = c.Face,
+                TownNum = c.Nation,
+                ZoneNumLow = (byte)c.Zone,
+                ZoneNumHigh = (byte)((c.Zone >> 8) & 1),
+                HairNum = c.Face,
+                Size = c.Size,
+                FaceModelId = c.Face,
+                HeadModelId = c.Look.Head,
+                BodyModelId = c.Look.Body,
+                HandsModelId = c.Look.Hands,
+                LegsModelId = c.Look.Legs,
+                FeetModelId = c.Look.Feet,
+                MainWeaponModelId = c.Look.Main,
+                SubWeaponModelId = c.Look.Sub,
+                GenFlag = 0,
+                AnonStatusFlag = 0,
+                WorldNum = (ushort)world.World.Num,
+            };
+            character.CharaInfo = info;
+            return character;
+        }
+
+        // ---- Federation migration (--federate-accounts) ----------------------------------------------------
+        // For a federated world that still has database settings: which world accounts own each member's
+        // characters there.
+        public static Dictionary<string, List<uint>> GetMemberAccounts(WorldContainer world)
+        {
+            Dictionary<string, List<uint>> members = [];
+            List<(string PolId, uint CharId)> owned = [];
+            using (MySqlConnection pol = new($"Server={POL_DB_HOST}; Port={POL_DB_PORT}; Database={POL_DB_NAME}; UID={POL_DB_USERNAME}; Password={POL_DB_PASSWORD}"))
+            {
+                pol.Open();
+                MySqlCommand cmd = new("SELECT polId, subId FROM characters WHERE contentClass = 1 AND subId <> 0 AND (subId >> 16) = @world", pol);
+                cmd.Parameters.AddWithValue("@world", world.World.Num);
+                using MySqlDataReader reader = cmd.ExecuteReader();
+                while (reader.Read())
+                    owned.Add((reader.GetString("polId"), reader.GetUInt32("subId") & 0xFFFF));
+            }
+
+            using MySqlConnection conn = new($"Server={world.DbHost}; Port={world.DbPort}; Database={world.DbName}; UID={world.DbUser}; Password={world.DbPass}");
+            conn.Open();
+            foreach (var (polId, charId) in owned)
+            {
+                MySqlCommand get = new("SELECT accid FROM chars WHERE charid = @charId AND accid <> 0", conn);
+                get.Parameters.AddWithValue("@charId", charId);
+                if (get.ExecuteScalar() is object accid && accid != DBNull.Value)
+                {
+                    List<uint> accids = members.TryGetValue(polId, out var a) ? a : members[polId] = [];
+                    if (!accids.Contains(Convert.ToUInt32(accid)))
+                        accids.Add(Convert.ToUInt32(accid));
+                }
+            }
+            return members;
+        }
+
+        // Maps a member to a world account in the world's accounts_federated table. Returns what happened.
+        public static string MapFederatedAccount(WorldContainer world, string providerId, string polId, uint accid)
+        {
+            using MySqlConnection conn = new($"Server={world.DbHost}; Port={world.DbPort}; Database={world.DbName}; UID={world.DbUser}; Password={world.DbPass}");
+            conn.Open();
+            MySqlCommand find = new("SELECT accid FROM accounts_federated WHERE provider = @provider AND subject = @subject", conn);
+            find.Parameters.AddWithValue("@provider", providerId);
+            find.Parameters.AddWithValue("@subject", polId);
+            if (find.ExecuteScalar() is object existing && existing != DBNull.Value)
+                return Convert.ToUInt32(existing) == accid ? "already mapped" : $"conflict: the member is mapped to account {existing}";
+
+            MySqlCommand taken = new("SELECT CONCAT(provider, ':', subject) FROM accounts_federated WHERE accid = @accid", conn);
+            taken.Parameters.AddWithValue("@accid", accid);
+            if (taken.ExecuteScalar() is string other)
+                return $"conflict: the account is mapped to {other}";
+
+            MySqlCommand map = new("INSERT INTO accounts_federated(provider, subject, accid) VALUES(@provider, @subject, @accid)", conn);
+            map.Parameters.AddWithValue("@provider", providerId);
+            map.Parameters.AddWithValue("@subject", polId);
+            map.Parameters.AddWithValue("@accid", accid);
+            map.ExecuteNonQuery();
+            return "mapped";
         }
 
         // ---- LandSandBoat accounts ----------------------------------------------------------------------
@@ -450,38 +572,6 @@ namespace Crystal.FFXILobbyServer
                 conn.Dispose();
             }
             return false;
-        }
-
-        // Federation: a world's gateway admits a character only for the account mapped to the player's global id
-        // (<provider id>:<PlayOnline ID>) in its accounts_federated table. While this lobby still makes the shadow
-        // account in the world database, it records that mapping too. Returns the character's account, 0 if none.
-        public static uint PrepareFederatedEntry(WorldContainer world, uint ffxiWorldId, string polId, string providerId)
-        {
-            using MySqlConnection conn = new($"Server={world.DbHost}; Port={world.DbPort}; Database={world.DbName}; UID={world.DbUser}; Password={world.DbPass}");
-            try
-            {
-                conn.Open();
-
-                uint accid = GetCharacterAccount(conn, ffxiWorldId, polId);
-                if (accid == 0)
-                {
-                    Program.Log.Error($"{polId} - Character {ffxiWorldId} has no account (deleted?)");
-                    return 0;
-                }
-
-                // An existing mapping is kept: if it names another account, the gateway refuses the character.
-                MySqlCommand map = new("INSERT IGNORE INTO accounts_federated(provider, subject, accid) VALUES(@provider, @subject, @accid)", conn);
-                map.Parameters.AddWithValue("@provider", providerId);
-                map.Parameters.AddWithValue("@subject", polId);
-                map.Parameters.AddWithValue("@accid", accid);
-                map.ExecuteNonQuery();
-                return accid;
-            }
-            catch (MySqlException e)
-            {
-                Program.Log.Error(e.ToString());
-            }
-            return 0;
         }
 
         public static bool AddSession(WorldContainer world, uint ffxiWorldId, string polId, byte[] key, uint serverAddress, uint serverPort, uint clientAddress, string clientVersion, uint clientExpansions)
