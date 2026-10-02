@@ -452,6 +452,38 @@ namespace Crystal.FFXILobbyServer
             return false;
         }
 
+        // Federation: a world's gateway admits a character only for the account mapped to the player's global id
+        // (<provider id>:<PlayOnline ID>) in its accounts_federated table. While this lobby still makes the shadow
+        // account in the world database, it records that mapping too. Returns the character's account, 0 if none.
+        public static uint PrepareFederatedEntry(WorldContainer world, uint ffxiWorldId, string polId, string providerId)
+        {
+            using MySqlConnection conn = new($"Server={world.DbHost}; Port={world.DbPort}; Database={world.DbName}; UID={world.DbUser}; Password={world.DbPass}");
+            try
+            {
+                conn.Open();
+
+                uint accid = GetCharacterAccount(conn, ffxiWorldId, polId);
+                if (accid == 0)
+                {
+                    Program.Log.Error($"{polId} - Character {ffxiWorldId} has no account (deleted?)");
+                    return 0;
+                }
+
+                // An existing mapping is kept: if it names another account, the gateway refuses the character.
+                MySqlCommand map = new("INSERT IGNORE INTO accounts_federated(provider, subject, accid) VALUES(@provider, @subject, @accid)", conn);
+                map.Parameters.AddWithValue("@provider", providerId);
+                map.Parameters.AddWithValue("@subject", polId);
+                map.Parameters.AddWithValue("@accid", accid);
+                map.ExecuteNonQuery();
+                return accid;
+            }
+            catch (MySqlException e)
+            {
+                Program.Log.Error(e.ToString());
+            }
+            return 0;
+        }
+
         public static bool AddSession(WorldContainer world, uint ffxiWorldId, string polId, byte[] key, uint serverAddress, uint serverPort, uint clientAddress, string clientVersion, uint clientExpansions)
         {
             using MySqlConnection conn = new($"Server={world.DbHost}; Port={world.DbPort}; Database={world.DbName}; UID={world.DbUser}; Password={world.DbPass}");

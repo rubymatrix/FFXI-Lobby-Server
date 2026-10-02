@@ -240,7 +240,23 @@ namespace Crystal.FFXILobbyServer
                 if (chara.ContentsId == contentId && (chara.ContentsSubUserId & 0xFFFF) == ffxiIdWorld)
                 {
                     WorldContainer world = Server.GetWorldFromSubContentId(chara.ContentsSubUserId);
-                    uint myIp = BitConverter.ToUInt32(((IPEndPoint)ClientSocket.RemoteEndPoint).Address.GetAddressBytes());
+                    IPAddress clientAddress = ((IPEndPoint)ClientSocket.RemoteEndPoint).Address.MapToIPv4();
+
+                    // A world with a federation gateway writes its own session from a signed world-entry token,
+                    // and names the map server for the character's zone.
+                    if (world.UsesGateway)
+                    {
+                        if (Federation.Issuer == null || Database.PrepareFederatedEntry(world, ffxiIdWorld, PolProData, Federation.Issuer.ServerId) == 0)
+                            return null;
+                        string version = ClientVersion.Length > 16 ? ClientVersion[..16] : ClientVersion;
+                        var entry = new XiToken.WorldEntry(ffxiIdWorld, null, clientAddress.ToString(), version, ClientExpansions, key);
+                        Federation.Admission admission = Federation.Admit(world, PolProData, entry);
+                        if (admission == null)
+                            return null;
+                        return new(world.World.Num, admission.MapIp, admission.MapPort, world.CacheIp, world.CachePort);
+                    }
+
+                    uint myIp = BitConverter.ToUInt32(clientAddress.GetAddressBytes());
                     // The session names the map server the client is sent to (lobby.cfg's world ip/port), not
                     // the address Server.cs passes in, which is hardcoded.
                     // No session (already logged in, deleted, database error): the map server would refuse

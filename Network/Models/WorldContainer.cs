@@ -39,6 +39,12 @@ namespace Crystal.FFXILobbyServer.Network.Models
         // the ones the lobby reports (Utils.ServerExpansions). Empty: not configured.
         public string SettingsDir = "";
 
+        // Federation (Federation.cs): the world's gateway base URL (xi_world's HTTP server) and its xitoken server id.
+        // With both set, characters enter the world through the gateway instead of a direct accounts_sessions insert.
+        public string GatewayUrl = "";
+        public string FederationWorldId = "";
+        public bool UsesGateway => GatewayUrl.Length > 0 && FederationWorldId.Length > 0;
+
         public WorldContainer(World world, string host, string port, string name, string usr, string pass, uint srvIp, uint srvPort, uint cacheIp, uint cachePort)
         {
             World = world;

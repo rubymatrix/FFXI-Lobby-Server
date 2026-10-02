@@ -43,6 +43,12 @@ namespace Crystal.FFXILobbyServer
 
         public readonly List<WorldContainer> WorldList;
 
+        // <federation serverId="xi1..." kid="2026-10" signingKey="path to k4.secret file"/>: this lobby's xitoken
+        // identity, for worlds that take characters through a federation gateway
+        public readonly string FederationServerId;
+        public readonly string FederationKeyId;
+        public readonly string FederationSigningKey;
+
         public FFXILobbyConfig(string path) 
         {
             Console.ForegroundColor = ConsoleColor.Yellow;
@@ -66,6 +72,12 @@ namespace Crystal.FFXILobbyServer
                     PolDbName = cfgChildNode.Attributes["database"]?.InnerText;
                     PolDbUsername = cfgChildNode.Attributes["username"]?.InnerText;
                     PolDbPassword = cfgChildNode.Attributes["password"]?.InnerText;
+                }
+                if (cfgChildNode.Name.Equals("federation"))
+                {
+                    FederationServerId = cfgChildNode.Attributes["serverId"]?.InnerText;
+                    FederationKeyId = cfgChildNode.Attributes["kid"]?.InnerText;
+                    FederationSigningKey = cfgChildNode.Attributes["signingKey"]?.InnerText;
                 }
                 if (cfgChildNode.Name.Equals("worlds"))
                 {
@@ -97,7 +109,12 @@ namespace Crystal.FFXILobbyServer
                                 srvPort,
                                 cacheIp,
                                 cachePort
-                            ) { SettingsDir = worldNode.Attributes["settingsDir"]?.InnerText ?? "" });
+                            )
+                            {
+                                SettingsDir = worldNode.Attributes["settingsDir"]?.InnerText ?? "",
+                                GatewayUrl = worldNode.Attributes["gateway"]?.InnerText ?? "",
+                                FederationWorldId = worldNode.Attributes["worldId"]?.InnerText ?? "",
+                            });
                         }
                     }
                     WorldList = tempWorldList;

@@ -85,6 +85,8 @@ namespace Crystal.FFXILobbyServer
             Database.POL_DB_USERNAME = config.PolDbUsername;
             Database.POL_DB_PASSWORD = config.PolDbPassword;
 
+            Federation.Configure(config);
+
             // Setup Server
             Server server = new Server(config.WorldList);
 

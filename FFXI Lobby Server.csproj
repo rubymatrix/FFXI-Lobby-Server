@@ -22,6 +22,14 @@
     <Compile Remove="packages\**" />
     <EmbeddedResource Remove="packages\**" />
     <None Remove="packages\**" />
+    <!-- External\XiToken is its own project, referenced below -->
+    <Compile Remove="External\**" />
+    <EmbeddedResource Remove="External\**" />
+    <None Remove="External\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="External\XiToken\XiToken.csproj" />
   </ItemGroup>
   
   <ItemGroup>
