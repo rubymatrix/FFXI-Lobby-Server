@@ -188,9 +188,9 @@ namespace Crystal.FFXILobbyServer
                 {
                     if (!federatedLists.TryGetValue(worldNum, out var list))
                     {
-                        list = Federation.ListCharacters(world, polId);
-                        if (list == null)
-                            return null;
+                        // A world that cannot answer now (down, in maintenance) leaves its characters out of this
+                        // list; the member still sees and can play the characters of every other world
+                        list = Federation.ListCharacters(world, polId) ?? [];
                         federatedLists[worldNum] = list;
                     }
                     XiToken.GatewayCharacter found = list.FirstOrDefault(c => c.Id == (polChar.ContentsSubUserId & 0xFFFF));
@@ -275,7 +275,8 @@ namespace Crystal.FFXILobbyServer
                 }
             }
 
-            return characters;
+            // Characters left out (a world gone or not answering) leave no blank entries behind
+            return characters[..indx];
         }
 
         // A federated world's character, as the lobby describes it to the client
