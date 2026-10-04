@@ -43,6 +43,7 @@ namespace Crystal.FFXILobbyServer
         // lobby.cfg login hardening (FFXILobbyConfig)
         public bool SingleUseContentAuth = true;
         public bool CheckClientIp = true;
+        public System.Net.IPAddress FederationPublicIp; // lobby.cfg <federation publicIp>, for remote worlds' world-entry tokens
 
         private readonly List<Client> ClientList = [];
 
@@ -238,10 +239,10 @@ namespace Crystal.FFXILobbyServer
                             CreateCharPrePkt requestPkt = CreateCharPrePkt.Cast(packet.Data);
                             if (conn.VerifyPassword(requestPkt.Password))
                             {
-                                World? world = GetWorldFromName(requestPkt.WorldName);
+                                WorldContainer world = WorldList.FirstOrDefault(container => container.World.Name == requestPkt.WorldName);
                                 if (world != null)
                                 {
-                                    conn.SetRequestedCharaName(requestPkt.Name);
+                                    conn.SetRequestedCharaName(requestPkt.Name, world);
                                     conn.Md5Key++;
                                     conn.SendPacket(OkPkt.OPCODE, new OkPkt().Bytes);
                                     Program.Log.Info($"{conn.GetPolProData()} - PreCreateing a character");
@@ -257,12 +258,17 @@ namespace Crystal.FFXILobbyServer
                             CreateCharPkt requestPkt = CreateCharPkt.Cast(packet.Data);
                             if (conn.VerifyPassword(requestPkt.Password))
                             {
-                                if (!conn.CreateCharacter(requestPkt.FFXIId, requestPkt.Password, requestPkt.NewCharaInfo))
-                                    conn.SendError(0);
-                                conn.Md5Key++;
-                                conn.SendPacket(OkPkt.OPCODE, new OkPkt().Bytes);
-                                conn.ClearCharacters();
-                                Program.Log.Info($"{conn.GetPolProData()} - Creating a character");
+                                // A refusal is sent as the error alone, never followed by an OK
+                                uint error = conn.CreateCharacter(requestPkt.FFXIId, requestPkt.Password, requestPkt.NewCharaInfo);
+                                if (error != 0)
+                                    conn.SendError(error);
+                                else
+                                {
+                                    conn.Md5Key++;
+                                    conn.SendPacket(OkPkt.OPCODE, new OkPkt().Bytes);
+                                    conn.ClearCharacters();
+                                    Program.Log.Info($"{conn.GetPolProData()} - Created a character");
+                                }
                             }
                             else
                                 conn.SendError(0);

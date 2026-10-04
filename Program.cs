@@ -101,6 +101,7 @@ namespace Crystal.FFXILobbyServer
             {
                 SingleUseContentAuth = config.SingleUseContentAuth,
                 CheckClientIp = config.CheckClientIp,
+                FederationPublicIp = string.IsNullOrEmpty(config.FederationPublicIp) ? null : System.Net.IPAddress.Parse(config.FederationPublicIp),
             };
 
             // Setup Service

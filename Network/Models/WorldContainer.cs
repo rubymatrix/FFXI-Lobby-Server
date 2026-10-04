@@ -51,6 +51,7 @@ namespace Crystal.FFXILobbyServer.Network.Models
         public string GatewayOverride;
         public bool NameFromKeySet;
         public GatewayClient Gateway;
+        public bool GatewayIsRemote; // its gateway is not on a loopback or private address, so its map servers see clients' public addresses
         public uint? Expansions;
         public DateTime LastConnectAttempt = DateTime.MinValue;
 

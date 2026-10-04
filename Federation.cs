@@ -96,6 +96,9 @@ namespace Crystal.FFXILobbyServer
                 string gateway = string.IsNullOrEmpty(world.GatewayOverride) ? set.World.Gateway : world.GatewayOverride;
                 world.Gateway?.Dispose();
                 world.Gateway = new GatewayClient(gateway, world.Trust, Issuer, world.Pin);
+                Uri gatewayUri = new(gateway);
+                world.GatewayIsRemote = !gatewayUri.IsLoopback &&
+                                        !(IPAddress.TryParse(gatewayUri.Host, out IPAddress gatewayIp) && !IsPublic(gatewayIp));
                 world.Expansions = set.World.Expansions;
                 // The search server the world publishes, unless lobby.cfg names one
                 if (world.CacheIp == 0 && set.World.Search is { } search && IPEndPoint.TryParse(search, out IPEndPoint searchAt) &&
@@ -178,14 +181,19 @@ namespace Crystal.FFXILobbyServer
             return result.Ok ? result.Value : null;
         }
 
-        public static uint CreateCharacter(WorldContainer world, string polId, NewCharacter character)
+        // The new character's id on the world, or 0 with the world's reason in error (null when it could not be asked)
+        public static uint CreateCharacter(WorldContainer world, string polId, NewCharacter character, out string error)
         {
+            error = null;
             GatewayClient gateway = GatewayFor(world);
             if (gateway == null)
                 return 0;
             var result = gateway.CreateCharacterAsync(polId, character).GetAwaiter().GetResult();
             if (!result.Ok)
+            {
+                error = result.Error;
                 Program.Log.Warn($"{polId} - World {world.World.Name} refused to create {character.Name}: {result.Error}");
+            }
             return result.Ok ? result.Value : 0;
         }
 
@@ -207,6 +215,16 @@ namespace Crystal.FFXILobbyServer
             return result is { Ok: true };
         }
 
+        // Not loopback, private (10/8, 172.16/12, 192.168/16), CGNAT (100.64/10, Tailscale) or link-local
+        public static bool IsPublic(IPAddress address)
+        {
+            if (IPAddress.IsLoopback(address))
+                return false;
+            byte[] b = address.MapToIPv4().GetAddressBytes();
+            return !(b[0] == 10 || (b[0] == 172 && (b[1] & 0xF0) == 16) || (b[0] == 192 && b[1] == 168) ||
+                     (b[0] == 100 && (b[1] & 0xC0) == 64) || (b[0] == 169 && b[1] == 254));
+        }
+
         public record Admission(uint MapIp, uint MapPort);
 
         // Sends the world a world-entry token for this character. Returns the map server the world chose for it, or
@@ -222,6 +240,7 @@ namespace Crystal.FFXILobbyServer
                 Program.Log.Warn($"{polId} - World {world.World.Name} refused character {entry.CharId}: {result.Status} {result.Error}");
                 return null;
             }
+            Program.Log.Info($"{polId} - World {world.World.Name} admitted character {entry.CharId} from {entry.ClientIp} to map server {mapIp}:{result.Value.Port}");
             return new(BitConverter.ToUInt32(mapIp.GetAddressBytes()), result.Value.Port);
         }
 

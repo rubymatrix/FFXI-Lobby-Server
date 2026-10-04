@@ -51,6 +51,9 @@ namespace Crystal.FFXILobbyServer
         public readonly string FederationServerId;
         public readonly string FederationKeyId;
         public readonly string FederationSigningKey;
+        // publicIp="...": the address remote worlds see this lobby's players come from, sent in their world-entry
+        // tokens when a client reached the lobby from a private, CGNAT (Tailscale) or loopback address
+        public readonly string FederationPublicIp;
 
         // <registry url="https://... or a file" trust="xi1..." pin="sha256:..."/>: a signed list of federated worlds to
         // offer besides the ones named under <worlds>
@@ -91,6 +94,7 @@ namespace Crystal.FFXILobbyServer
                     FederationServerId = cfgChildNode.Attributes["serverId"]?.InnerText;
                     FederationKeyId = cfgChildNode.Attributes["kid"]?.InnerText;
                     FederationSigningKey = cfgChildNode.Attributes["signingKey"]?.InnerText;
+                    FederationPublicIp = cfgChildNode.Attributes["publicIp"]?.InnerText;
                 }
                 if (cfgChildNode.Name.Equals("registry"))
                 {

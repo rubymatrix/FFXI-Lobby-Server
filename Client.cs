@@ -56,6 +56,11 @@ namespace Crystal.FFXILobbyServer
         // Session
         private Character[] CachedCharaList = null;
         private string RequestedNewCharName = "";
+        private WorldContainer RequestedNewCharWorld; // the world the client named when it reserved the name
+
+        // Lobby error codes the client shows for a new character (LandSandBoat login_errors.h)
+        public const uint ERR_NAME_UNAVAILABLE = 313; // "The character name you entered is unavailable."
+        public const uint ERR_NAME_SERVER      = 314; // "Failed to register with the name server."
 
         public bool IsDisconnected() => Disconnected;
 
@@ -198,7 +203,8 @@ namespace Crystal.FFXILobbyServer
             CachedCharaList = null;
         }
 
-        public bool CreateCharacter(uint contentId, byte[] password, CharaInfo charaInfo)
+        // 0 when the character was made, else the lobby error to send the client
+        public uint CreateCharacter(uint contentId, byte[] password, CharaInfo charaInfo)
         {
             // Check Race
 
@@ -228,22 +234,27 @@ namespace Crystal.FFXILobbyServer
                     }
             }
 
-            // Create a new character and update the content id
-            WorldContainer world = Server.WorldList[charaInfo.WorldNum];
+            // Create a new character on the world the client named before (the world field of the character info
+            // is not a lobby.cfg position) and update the content id
+            WorldContainer world = RequestedNewCharWorld;
+            if (world == null)
+                return ERR_NAME_SERVER;
             string name = RequestedNewCharName.TrimEnd('\0');
             uint newSubId;
             if (world.IsFederated)
             {
                 // The world picks the starting zone and enforces its own name and account rules
                 uint charId = Federation.CreateCharacter(world, PolProData, new XiToken.NewCharacter(
-                    name, (byte)charaInfo.RaceNum, (byte)charaInfo.FaceNum, charaInfo.Size, charaInfo.MJobNum, charaInfo.TownNum));
+                    name, (byte)charaInfo.RaceNum, (byte)charaInfo.FaceNum, charaInfo.Size, charaInfo.MJobNum, charaInfo.TownNum), out string error);
+                if (error is "name_taken" or "name_invalid")
+                    return ERR_NAME_UNAVAILABLE;
                 newSubId = charId is > 0 and <= 0xFFFF ? (world.World.Num << 16) | charId : 0;
             }
             else
                 newSubId = Database.CreateCharacter(world, charaInfo, RequestedNewCharName, startZone, PolProData);
-            if (newSubId != 0)
-                return Database.UpdateFFXISubContentId(contentId, newSubId, RequestedNewCharName);
-            return false;
+            if (newSubId != 0 && Database.UpdateFFXISubContentId(contentId, newSubId, RequestedNewCharName))
+                return 0;
+            return ERR_NAME_SERVER;
         }
 
         public WorldServerInfo? DoSelect(uint contentId, uint ffxiIdWorld, uint serverAddress, uint port)
@@ -266,7 +277,12 @@ namespace Crystal.FFXILobbyServer
                     if (world.IsFederated)
                     {
                         string version = ClientVersion.Length > 16 ? ClientVersion[..16] : ClientVersion;
-                        var entry = new XiToken.WorldEntry(ffxiIdWorld, null, clientAddress.ToString(), version, ClientExpansions, key);
+                        // A remote world's map server sees the client come from this network's public address,
+                        // not the private or Tailscale one it reached the lobby on
+                        IPAddress entryAddress = world.GatewayIsRemote && !Federation.IsPublic(clientAddress) && Server.FederationPublicIp != null
+                            ? Server.FederationPublicIp
+                            : clientAddress;
+                        var entry = new XiToken.WorldEntry(ffxiIdWorld, null, entryAddress.ToString(), version, ClientExpansions, key);
                         Federation.Admission admission = Federation.Admit(world, PolProData, entry);
                         if (admission == null)
                             return null;
@@ -338,9 +354,10 @@ namespace Crystal.FFXILobbyServer
             SendPacket(ErrorPkt.OPCODE, new ErrorPkt() { ErrCode = errCode }.Bytes);
         }
 
-        public void SetRequestedCharaName(string charaName)
+        public void SetRequestedCharaName(string charaName, WorldContainer world)
         {
             RequestedNewCharName = charaName;
+            RequestedNewCharWorld = world;
         }
     }
 }
