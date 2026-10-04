@@ -240,7 +240,14 @@ namespace Crystal.FFXILobbyServer
                             if (conn.VerifyPassword(requestPkt.Password))
                             {
                                 WorldContainer world = WorldList.FirstOrDefault(container => container.World.Name == requestPkt.WorldName);
-                                if (world != null)
+                                // The client expects a refused name here, where it lets the player pick another; after
+                                // the creation itself, an error drops the connection (3113)
+                                uint nameError = world != null && !string.IsNullOrEmpty(world.DbHost)
+                                    ? Database.CharacterNameError(world, requestPkt.Name.TrimEnd('\0'))
+                                    : 0;
+                                if (nameError != 0)
+                                    conn.SendError(nameError);
+                                else if (world != null)
                                 {
                                     conn.SetRequestedCharaName(requestPkt.Name, world);
                                     conn.Md5Key++;

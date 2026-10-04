@@ -158,6 +158,37 @@ namespace Crystal.FFXILobbyServer
             return true;
         }
 
+        // 0 if the name can be given to a character of the world, else the error to show: letters only, 3 to 15 of
+        // them, and no character of the world has it in any case (deleted ones included: LandSandBoat keeps their
+        // rows). Only for a world whose database lobby.cfg names; a federated world without one checks at creation.
+        public static uint CharacterNameError(WorldContainer world, string name)
+        {
+            if (name.Length < 3 || name.Length > 15 || !name.All(char.IsAsciiLetter))
+            {
+                Program.Log.Warn($"Character name <{name}> refused: not 3 to 15 letters");
+                return Client.ERR_NAME_UNAVAILABLE;
+            }
+
+            using MySqlConnection conn = new($"Server={world.DbHost}; Port={world.DbPort}; Database={world.DbName}; UID={world.DbUser}; Password={world.DbPass}");
+            try
+            {
+                conn.Open();
+                MySqlCommand cmd = new("SELECT COUNT(*) FROM chars WHERE LOWER(charname) = LOWER(@name)", conn);
+                cmd.Parameters.AddWithValue("@name", name);
+                if (Convert.ToUInt32(cmd.ExecuteScalar()) != 0)
+                {
+                    Program.Log.Warn($"Character name <{name}> refused: in use on {world.World.Name}");
+                    return Client.ERR_NAME_UNAVAILABLE;
+                }
+                return 0;
+            }
+            catch (MySqlException e)
+            {
+                Program.Log.Error(e.ToString());
+                return Client.ERR_NAME_SERVER;
+            }
+        }
+
         public static Character[] GetCharacters(List<WorldContainer> worldList, CharacterPrimitive[] contentIdList, string polId)
         {
             // Go through each content id. If there is a server id, grab chara data, otherwise set to blank.
