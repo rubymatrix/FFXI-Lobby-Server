@@ -55,14 +55,12 @@ namespace Crystal.FFXILobbyServer
         }
 
         // The status and JSON body of a call; (0, null) when the world could not be reached or its answer is not JSON
-        private (int Status, JsonObject Body) Send(HttpMethod method, string path, JsonObject body = null, string session = null)
+        private (int Status, JsonObject Body) Send(HttpMethod method, string path, JsonObject body = null)
         {
             try
             {
                 using HttpRequestMessage request = new(method, World.ApiUrl.TrimEnd('/') + path);
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", World.ApiKey);
-                if (session != null)
-                    request.Headers.Add("X-Lobby-Session", session);
                 if (body != null)
                     request.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
 
@@ -176,7 +174,7 @@ namespace Crystal.FFXILobbyServer
         // Puts the character's session in the world, for the map server the client is sent to, and tells the world which
         // PlayOnline account it belongs to. 0, or the error to show: already logged in when the world has this character
         // or another of the account in it, else world server.
-        public uint Enter(uint contentId, uint charId, ulong polId, byte[] key, uint serverAddress, uint serverPort, uint clientAddress, string clientVersion, uint clientExpansions, string lobbyToken)
+        public uint Enter(uint contentId, uint charId, ulong polId, byte[] key, uint serverAddress, uint serverPort, uint clientAddress, string clientVersion, uint clientExpansions)
         {
             var (status, body) = Send(HttpMethod.Post, "/api/lobby/sessions/enter", new JsonObject
             {
@@ -188,7 +186,6 @@ namespace Crystal.FFXILobbyServer
                 ["clientAddr"] = clientAddress,
                 ["clientVersion"] = clientVersion,
                 ["clientExpansions"] = clientExpansions,
-                ["lobbyToken"] = lobbyToken,
                 ["account"] = new JsonObject { ["polId"] = polId },
             });
             if (status == 200)
@@ -198,14 +195,6 @@ namespace Crystal.FFXILobbyServer
             return status == 409 ? ERR_ALREADY_LOGGED_IN : ERR_WORLD_SERVER;
         }
 
-        // The content id and character of the world's live session with this token, if there is one
-        public (uint ContentId, uint CharId)? SessionByToken(string token)
-        {
-            var (status, body) = Send(HttpMethod.Get, "/api/lobby/session", session: token);
-            if (status == 200 && body["contentId"] is JsonNode contentId && body["charId"] is JsonNode charId)
-                return (contentId.GetValue<uint>(), charId.GetValue<uint>());
-            return null;
-        }
     }
 
     // A character as the world lists it
