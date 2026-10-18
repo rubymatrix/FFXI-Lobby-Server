@@ -117,8 +117,9 @@ namespace Crystal.FFXILobbyServer
             return body["error"]?.GetValue<uint>() ?? ERR_NAME_SERVER;
         }
 
-        // The new character's id on the world, or 0 with the error to show
-        public uint CreateCharacter(uint contentId, ulong polId, string name, CharaInfo info, uint startZone, out uint error)
+        // The new character's id on the world, or 0 with the error to show. Unknown when the world gave no answer, so it
+        // may have made the character; sending the same create again then answers its charid.
+        public uint CreateCharacter(uint contentId, ulong polId, string name, CharaInfo info, uint startZone, out uint error, out bool unknown)
         {
             error = 0;
             var (status, body) = Send(HttpMethod.Post, "/api/lobby/characters/create", new JsonObject
@@ -135,6 +136,7 @@ namespace Crystal.FFXILobbyServer
                 ["nation"] = info.TownNum,
                 ["startZone"] = startZone,
             });
+            unknown = status == 0;
             if (status == 200 && body["charId"] is JsonNode charId)
                 return charId.GetValue<uint>();
 

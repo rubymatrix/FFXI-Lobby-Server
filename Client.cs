@@ -55,9 +55,9 @@ namespace Crystal.FFXILobbyServer
         private byte[] Password;
         public uint Md5Key;
 
-        // Creating characters is one at a time across the lobby, so two new characters cannot take the same name or
-        // character id; selecting is one at a time per PlayOnline member, so two selections cannot both find the
-        // member's characters out of the world.
+        // Renaming is one at a time across the lobby; selecting is one at a time per PlayOnline member, so two
+        // selections cannot both find the member's characters out of the world. Creating needs no lock: the slot claim
+        // in POL and the world's own checks keep two creates apart.
         private static readonly object CreateLock = new();
         private static readonly ConcurrentDictionary<string, object> MemberLocks = new();
 
@@ -233,28 +233,32 @@ namespace Crystal.FFXILobbyServer
             WorldContainer world = RequestedNewCharWorld;
             if (world == null)
                 return WorldApi.ERR_WORLD_SERVER;
-            lock (CreateLock)
+            // The client names the content id, so claim it only if it is one of the member's own and holds no
+            // character yet. The claim (world number, charid 0) keeps any other create off the slot.
+            uint claim = world.World.Num << 16;
+            if (!Database.ClaimFFXISlot(contentId, PolProData, claim))
             {
-                // The client names the content id, so only accept one of the member's own that holds no character yet
-                if (!Database.GetFFXIContentIds(PolProData).Any(chara => chara.ContentsId == contentId && chara.ContentsSubUserId == 0))
-                {
-                    Program.Log.Warn($"{PolProData} - Refused to create a character on content id {contentId}, which is not an empty slot of theirs");
-                    return WorldApi.ERR_NAME_SERVER;
-                }
-
-                // The world checks the name again when it creates the character
-                uint charId = world.Api.CreateCharacter(contentId, PolId, RequestedNewCharName, charaInfo, startZone, out uint error);
-                if (charId == 0)
-                    return error != 0 ? error : WorldApi.ERR_NAME_SERVER;
-                // The character is the world's now; the lobby records which content id slot holds it
-                uint newSubId = (world.World.Num << 16) | charId;
-                if (!Database.UpdateFFXISubContentId(contentId, newSubId, RequestedNewCharName))
-                {
-                    // Without the record the character would sit on the world out of anyone's reach
-                    world.Api.DeleteCharacter(contentId, charId);
-                    return WorldApi.ERR_NAME_SERVER;
-                }
+                Program.Log.Warn($"{PolProData} - Refused to create a character on content id {contentId}, which is not an empty slot of theirs");
+                return WorldApi.ERR_NAME_SERVER;
             }
+
+            // The world checks the name again when it creates the character
+            uint charId = world.Api.CreateCharacter(contentId, PolId, RequestedNewCharName, charaInfo, startZone, out uint error, out bool unknown);
+            if (charId == 0)
+            {
+                // A refusal frees the slot. With no answer the world may have made the character, so the claim stays
+                // and the next character list finds out (Database.GetCharacters).
+                if (!unknown)
+                    Database.ReleaseFFXIClaim(contentId, claim);
+                else
+                    Program.Log.Warn($"{PolProData} - No answer creating on content id {contentId}; the next list settles it");
+                return error != 0 ? error : WorldApi.ERR_NAME_SERVER;
+            }
+
+            // The character is the world's now; the lobby records which content id slot holds it. If that fails the
+            // claim stays, and the next list binds it.
+            if (!Database.UpdateFFXISubContentId(contentId, claim | charId, RequestedNewCharName))
+                return WorldApi.ERR_NAME_SERVER;
             return 0;
         }
 
