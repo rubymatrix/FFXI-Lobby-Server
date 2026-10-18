@@ -39,13 +39,14 @@ namespace Crystal.FFXILobbyServer
         public static string POL_DB_USERNAME = "root";
         public static string POL_DB_PASSWORD = "";
 
-        public static Tuple<byte[], string> GetPlayonlineRandomValue(byte[] authHash)
+        // The member's POL random value, POL ID and numeric POL ID (PolProDataToPolId, 0 when the POL ID is malformed)
+        public static Tuple<byte[], string, ulong> GetPlayonlineRandomValue(byte[] authHash)
         {
             using MySqlConnection conn = new($"Server={POL_DB_HOST}; Port={POL_DB_PORT}; Database={POL_DB_NAME}; UID={POL_DB_USERNAME}; Password={POL_DB_PASSWORD}");
             try
             {
                 conn.Open();
-                MySqlCommand cmd = new("SELECT polRandomValueBinary, polId FROM sessions WHERE polContentAuthHash = @authHash", conn);
+                MySqlCommand cmd = new("SELECT polRandomValueBinary, polId, PolProDataToPolId(polId, 0, 0) AS polIdNumber FROM sessions WHERE polContentAuthHash = @authHash", conn);
                 cmd.Parameters.AddWithValue("@authHash", authHash);
 
                 using MySqlDataReader Reader = cmd.ExecuteReader();
@@ -56,7 +57,8 @@ namespace Crystal.FFXILobbyServer
                     if (bytesRead == 0x10)
                     {
                         string polProData = Reader.GetString("polId");
-                        return new(randomValue, polProData);
+                        ulong polIdNumber = Reader.IsDBNull(Reader.GetOrdinal("polIdNumber")) ? 0 : Reader.GetUInt64("polIdNumber");
+                        return new(randomValue, polProData, polIdNumber);
                     }
                 }
             }

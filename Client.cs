@@ -49,6 +49,7 @@ namespace Crystal.FFXILobbyServer
         private bool IsLoggedIn = false;
 
         private string PolProData = "";
+        private ulong  PolId = 0;            // the numeric POL ID worlds key the account on (chars.pol_id)
         private string ClientVersion = "";   // version string of the lobby login (the client's patch.ver)
         private uint   ClientExpansions = 0; // expansions the client has installed
         private byte[] Password;
@@ -135,8 +136,12 @@ namespace Crystal.FFXILobbyServer
 
             Password = polData.Item1;
             PolProData = polData.Item2;
+            PolId = polData.Item3;
 
-            if (Password == null)
+            if (PolId == 0)
+                Program.Log.Error($"{PolProData} - No numeric POL ID (PolProDataToPolId); refusing the login");
+
+            if (Password == null || PolId == 0)
             {
                 key = 0;
                 serverExpCode = 0;
@@ -238,7 +243,7 @@ namespace Crystal.FFXILobbyServer
                 }
 
                 // The world checks the name again when it creates the character
-                uint charId = world.Api.CreateCharacter(contentId, RequestedNewCharName, charaInfo, startZone, out uint error);
+                uint charId = world.Api.CreateCharacter(contentId, PolId, RequestedNewCharName, charaInfo, startZone, out uint error);
                 if (charId == 0)
                     return error != 0 ? error : WorldApi.ERR_NAME_SERVER;
                 // The character is the world's now; the lobby records which content id slot holds it
@@ -291,7 +296,8 @@ namespace Crystal.FFXILobbyServer
                     // the address Server.cs passes in, which is hardcoded.
                     // No session (deleted, database error): the map server would refuse the character anyway, so
                     // fail here and the lobby sends an error instead.
-                    if (!world.Api.Enter(contentId, ffxiIdWorld, key, world.ServerIp, world.ServerPort, myIp, ClientVersion, ClientExpansions, AccountService.NewToken()))
+                    error = world.Api.Enter(contentId, ffxiIdWorld, PolId, key, world.ServerIp, world.ServerPort, myIp, ClientVersion, ClientExpansions, AccountService.NewToken());
+                    if (error != 0)
                         return null;
                     error = 0;
                     return new(world.World.Num, world.ServerIp, world.ServerPort, world.CacheIp, world.CachePort);
