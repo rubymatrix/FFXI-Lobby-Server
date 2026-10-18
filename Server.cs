@@ -40,9 +40,6 @@ namespace Crystal.FFXILobbyServer
 
         public readonly List<WorldContainer> WorldList;
 
-        // Started next to the lobby when lobby.cfg has <accounts listen="..."/>
-        public AccountService Accounts;
-
         // The expansions lobby.cfg enables, as the lobby login's bitmask; null: whatever the client has installed
         public uint? Expansions;
 

@@ -300,7 +300,7 @@ namespace Crystal.FFXILobbyServer
                     // the address Server.cs passes in, which is hardcoded.
                     // No session (deleted, database error): the map server would refuse the character anyway, so
                     // fail here and the lobby sends an error instead.
-                    error = world.Api.Enter(contentId, ffxiIdWorld, PolId, key, world.ServerIp, world.ServerPort, myIp, ClientVersion, ClientExpansions, AccountService.NewToken());
+                    error = world.Api.Enter(contentId, ffxiIdWorld, PolId, key, world.ServerIp, world.ServerPort, myIp, ClientVersion, ClientExpansions);
                     if (error != 0)
                         return null;
                     error = 0;
