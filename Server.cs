@@ -246,7 +246,7 @@ namespace Crystal.FFXILobbyServer
                                     conn.SendError(nameError);
                                 else if (world != null)
                                 {
-                                    conn.SetRequestedCharaName(requestPkt.Name);
+                                    conn.SetRequestedCharaName(requestPkt.Name, world);
                                     conn.Md5Key++;
                                     conn.SendPacket(OkPkt.OPCODE, new OkPkt().Bytes);
                                     Program.Log.Info($"{conn.GetPolProData()} - PreCreateing a character");
