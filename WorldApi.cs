@@ -118,12 +118,13 @@ namespace Crystal.FFXILobbyServer
         }
 
         // The new character's id on the world, or 0 with the error to show
-        public uint CreateCharacter(uint contentId, string name, CharaInfo info, uint startZone, out uint error)
+        public uint CreateCharacter(uint contentId, ulong polId, string name, CharaInfo info, uint startZone, out uint error)
         {
             error = 0;
             var (status, body) = Send(HttpMethod.Post, "/api/lobby/characters/create", new JsonObject
             {
                 ["contentId"] = contentId,
+                ["polId"] = polId,
                 ["name"] = name,
                 ["race"] = info.RaceNum,
                 // The face is the low byte of FaceModelId (0-15, 8B = 15), the byte at offset 60 of the create
@@ -170,9 +171,10 @@ namespace Crystal.FFXILobbyServer
             return status != 200 || body["online"]?.GetValue<bool>() != false;
         }
 
-        // Puts the character's session in the world, for the map server the client is sent to. False when the world
-        // refused (the character is still in the world, is not on that content id) or could not be asked.
-        public bool Enter(uint contentId, uint charId, byte[] key, uint serverAddress, uint serverPort, uint clientAddress, string clientVersion, uint clientExpansions, string lobbyToken)
+        // Puts the character's session in the world, for the map server the client is sent to, and tells the world which
+        // PlayOnline account it belongs to. 0, or the error to show: already logged in when the world has this character
+        // or another of the account in it, else world server.
+        public uint Enter(uint contentId, uint charId, ulong polId, byte[] key, uint serverAddress, uint serverPort, uint clientAddress, string clientVersion, uint clientExpansions, string lobbyToken)
         {
             var (status, body) = Send(HttpMethod.Post, "/api/lobby/sessions/enter", new JsonObject
             {
@@ -185,10 +187,13 @@ namespace Crystal.FFXILobbyServer
                 ["clientVersion"] = clientVersion,
                 ["clientExpansions"] = clientExpansions,
                 ["lobbyToken"] = lobbyToken,
+                ["account"] = new JsonObject { ["polId"] = polId },
             });
-            if (status != 200 && body != null)
+            if (status == 200)
+                return 0;
+            if (body != null)
                 LogRefusal($"admit character {charId}", status, body);
-            return status == 200;
+            return status == 409 ? ERR_ALREADY_LOGGED_IN : ERR_WORLD_SERVER;
         }
 
         // The content id and character of the world's live session with this token, if there is one
