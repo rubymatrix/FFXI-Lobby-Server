@@ -227,6 +227,13 @@ namespace Crystal.FFXILobbyServer
             WorldContainer world = Server.WorldList[charaInfo.WorldNum];
             lock (CreateLock)
             {
+                // The client names the content id, so only accept one of the member's own that holds no character yet
+                if (!Database.GetFFXIContentIds(PolProData).Any(chara => chara.ContentsId == contentId && chara.ContentsSubUserId == 0))
+                {
+                    Program.Log.Warn($"{PolProData} - Refused to create a character on content id {contentId}, which is not an empty slot of theirs");
+                    return WorldApi.ERR_NAME_SERVER;
+                }
+
                 // The world checks the name again when it creates the character
                 uint charId = world.Api.CreateCharacter(contentId, RequestedNewCharName, charaInfo, startZone, out uint error);
                 if (charId == 0)
