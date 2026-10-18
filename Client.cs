@@ -63,6 +63,7 @@ namespace Crystal.FFXILobbyServer
         // Session
         private Character[] CachedCharaList = null;
         private string RequestedNewCharName = "";
+        private WorldContainer RequestedNewCharWorld = null;
 
         public bool IsDisconnected() => Disconnected;
 
@@ -223,8 +224,10 @@ namespace Crystal.FFXILobbyServer
                     }
             }
 
-            // Create a new character and update the content id
-            WorldContainer world = Server.WorldList[charaInfo.WorldNum];
+            // Create the character on the world the name was checked against, which the client picked by name
+            WorldContainer world = RequestedNewCharWorld;
+            if (world == null)
+                return WorldApi.ERR_WORLD_SERVER;
             lock (CreateLock)
             {
                 // The client names the content id, so only accept one of the member's own that holds no character yet
@@ -355,9 +358,10 @@ namespace Crystal.FFXILobbyServer
             SendPacket(ErrorPkt.OPCODE, new ErrorPkt() { ErrCode = errCode }.Bytes);
         }
 
-        public void SetRequestedCharaName(string charaName)
+        public void SetRequestedCharaName(string charaName, WorldContainer world)
         {
             RequestedNewCharName = charaName;
+            RequestedNewCharWorld = world;
         }
     }
 }
