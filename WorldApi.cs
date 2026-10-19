@@ -44,6 +44,7 @@ namespace Crystal.FFXILobbyServer
         public const uint ERR_WORLD_SERVER      = 305; // "Unable to connect to the world server. Specified operation failed."
         public const uint ERR_NAME_UNAVAILABLE  = 313; // "The character name you entered is unavailable."
         public const uint ERR_NAME_SERVER       = 314; // "Failed to register with the name server."
+        public const uint ERR_BANNED            = 332; // "Could not connect to lobby server. Please check this title's news for announcements."
 
         private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(10) };
 

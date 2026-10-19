@@ -115,14 +115,14 @@ namespace Crystal.FFXILobbyServer
             return IsLoggedIn ? PolProData : ClientIp.ToString();
         }
 
-        // Request info from PolPro
-        public bool Login(LobbyLoginPkt loginPkt, out uint key, out ulong serverExpCode)
+        // Request info from PolPro. 0, or the lobby error code to send.
+        public uint Login(LobbyLoginPkt loginPkt, out uint key, out ulong serverExpCode)
         {
             if (!Utils.DecryptAuthPassword(loginPkt.AuthCode, out byte[] authHash, out uint clientIp, out ushort clientPort))
             {
                 key = 0;
                 serverExpCode = 0;
-                return false;
+                return LoginFailed;
             }
 
             var polData = Database.GetPlayonlineRandomValue(authHash);
@@ -131,7 +131,7 @@ namespace Crystal.FFXILobbyServer
             {
                 key = 0;
                 serverExpCode = 0;
-                return false;
+                return LoginFailed;
             }
 
             Password = polData.Item1;
@@ -145,7 +145,16 @@ namespace Crystal.FFXILobbyServer
             {
                 key = 0;
                 serverExpCode = 0;
-                return false;
+                return LoginFailed;
+            }
+
+            // An admin suspends a member on the POL side by giving the account a message code (polauth set-admindata)
+            if (polData.Item4 != 0)
+            {
+                Program.Log.Warn($"{PolProData} - Account is suspended (adminData 0x{polData.Item4:X}); refusing the login");
+                key = 0;
+                serverExpCode = 0;
+                return WorldApi.ERR_BANNED;
             }
 
             Md5Key = BitConverter.ToUInt32(RandomNumberGenerator.GetBytes(4));
@@ -161,8 +170,11 @@ namespace Crystal.FFXILobbyServer
             Program.Log.Info($"Lobby login: server expansions 0x{serverExpCode:X}, client installed 0x{loginPkt.ClientExpCode:X}, version {System.Text.Encoding.ASCII.GetString(loginPkt.VersionCode).TrimEnd('\0')}");
 
             IsLoggedIn = true;
-            return true;
+            return 0;
         }
+
+        // What the lobby has always sent for a login it cannot place
+        private const uint LoginFailed = 100;
 
         // Verify the received pwd is right
         public bool VerifyPassword(byte[] incomingPassword)

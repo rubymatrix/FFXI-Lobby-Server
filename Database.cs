@@ -39,14 +39,19 @@ namespace Crystal.FFXILobbyServer
         public static string POL_DB_USERNAME = "root";
         public static string POL_DB_PASSWORD = "";
 
-        // The member's POL random value, POL ID and numeric POL ID (PolProDataToPolId, 0 when the POL ID is malformed)
-        public static Tuple<byte[], string, ulong> GetPlayonlineRandomValue(byte[] authHash)
+        // The member's POL random value, POL ID, numeric POL ID (PolProDataToPolId, 0 when the POL ID is malformed) and
+        // the account's adminData (0, or the POL message code an admin set to suspend it)
+        public static Tuple<byte[], string, ulong, ushort> GetPlayonlineRandomValue(byte[] authHash)
         {
             using MySqlConnection conn = new($"Server={POL_DB_HOST}; Port={POL_DB_PORT}; Database={POL_DB_NAME}; UID={POL_DB_USERNAME}; Password={POL_DB_PASSWORD}");
             try
             {
                 conn.Open();
-                MySqlCommand cmd = new("SELECT polRandomValueBinary, polId, PolProDataToPolId(polId, 0, 0) AS polIdNumber FROM sessions WHERE polContentAuthHash = @authHash", conn);
+                MySqlCommand cmd = new(@"
+                    SELECT s.polRandomValueBinary, s.polId, PolProDataToPolId(s.polId, 0, 0) AS polIdNumber, a.adminData
+                    FROM sessions s
+                    INNER JOIN accounts a ON a.polId = s.polId
+                    WHERE s.polContentAuthHash = @authHash", conn);
                 cmd.Parameters.AddWithValue("@authHash", authHash);
 
                 using MySqlDataReader Reader = cmd.ExecuteReader();
@@ -58,7 +63,8 @@ namespace Crystal.FFXILobbyServer
                     {
                         string polProData = Reader.GetString("polId");
                         ulong polIdNumber = Reader.IsDBNull(Reader.GetOrdinal("polIdNumber")) ? 0 : Reader.GetUInt64("polIdNumber");
-                        return new(randomValue, polProData, polIdNumber);
+                        ushort adminData = Reader.GetUInt16("adminData");
+                        return new(randomValue, polProData, polIdNumber, adminData);
                     }
                 }
             }
