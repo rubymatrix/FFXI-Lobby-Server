@@ -173,7 +173,7 @@ namespace Crystal.FFXILobbyServer
 
         // Puts the character's session in the world, for the map server the client is sent to, and tells the world which
         // PlayOnline account it belongs to. 0, or the error to show: already logged in when the world has this character
-        // or another of the account in it, else world server.
+        // or another of the account in it, else the error the world names (332 for a banned account) or world server.
         public uint Enter(uint contentId, uint charId, ulong polId, byte[] key, uint serverAddress, uint serverPort, uint clientAddress, string clientVersion, uint clientExpansions)
         {
             var (status, body) = Send(HttpMethod.Post, "/api/lobby/sessions/enter", new JsonObject
@@ -192,7 +192,7 @@ namespace Crystal.FFXILobbyServer
                 return 0;
             if (body != null)
                 LogRefusal($"admit character {charId}", status, body);
-            return status == 409 ? ERR_ALREADY_LOGGED_IN : ERR_WORLD_SERVER;
+            return status == 409 ? ERR_ALREADY_LOGGED_IN : ErrorOf(body, ERR_WORLD_SERVER);
         }
 
     }
