@@ -173,7 +173,8 @@ namespace Crystal.FFXILobbyServer
                         if (packet.Header.opcode == LobbyLoginPkt.OPCODE)
                         {
                             LobbyLoginPkt loginPkt = LobbyLoginPkt.Cast(packet.Data);
-                            if (conn.Login(loginPkt, out uint key, out ulong expCode))
+                            uint loginError = conn.Login(loginPkt, out uint key, out ulong expCode);
+                            if (loginError == 0)
                             {
                                 LobbyKeyPkt responsePkt = new()
                                 {
@@ -184,7 +185,7 @@ namespace Crystal.FFXILobbyServer
                                 Program.Log.Info($"{conn.GetPolProData()} - Logged into lobby server");
                             }
                             else
-                                conn.SendError(100);
+                                conn.SendError(loginError);
                         }
                         else if (packet.Header.opcode == GetCharPkt.OPCODE)
                         {
